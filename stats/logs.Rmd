@@ -1,0 +1,1439 @@
+---
+title: "exp log"
+author: "Allen Yeh"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```
+```
+
+```{r warning=FALSE}
+library(tidyverse)
+library(gmodels)
+library(rstatix)
+library(ggplot2)
+library(ez)
+```
+
+### Import data
+
+#### Read the csv file and claim the data type
+```{r}
+
+participants <- read_csv("participants-short.csv", col_types = cols(
+  id = col_integer(),
+  gender = col_factor(levels = c("Male","Female")), 
+  age = col_integer(), 
+  handed = col_factor(levels = c("Right","Left")), 
+  phoneExperience = col_factor(levels = c("-3","3-5", "6-10", "10-")),
+  phoneSize = col_factor(levels = c("-4", "4-5", "5-6", "6-")), 
+  dailyUsage = col_factor(levels = c("-1", "1-2", "2-4", "4-8", "8-")), 
+  handLength = col_double(),
+  handWidth = col_double()
+)) %>%
+  mutate(
+    phoneSize_Num = phoneSize  %>%  recode(
+          "-4" = 1,
+          "4-5" = 2,
+          "5-6" = 3,
+          "6-" = 4
+          )
+      )
+
+lefthanded_ids <- c(14, 11)
+
+
+logs <- read_csv("summaryLogs.csv", col_types = cols(
+  id = col_integer(),
+  type = col_factor(levels = c("0", "1", "2")),
+  direction = col_factor(levels = c("0", "1")), 
+  angle = col_factor(levels = c("-1", "0", "1", "2")),
+  location = col_integer(),
+  time = col_integer(),
+  trial = col_integer(),
+  block = col_factor(levels = c("1", "2", "3")),
+  errors = col_integer(),
+  correct = col_logical()
+)) %>% 
+  mutate(
+    type_code = type %>% recode_factor(
+      `2` = "FOLDTOUCH",  
+      `1` = "TOUCHFOLD",
+      `0` = "FOLD"
+      ),
+    direction_code = direction %>% recode_factor(
+      `1` = "OUTWARD",
+      `0` = "INWARD"
+      ),
+    angle_code = angle %>% recode_factor(
+      `2` = "LARGE",
+      `1` = "MEDIUM",
+      `0` = "SMALL",
+      `-1` = "NONE"
+      ),
+    locationX = ifelse(id %in% lefthanded_ids, (1 - location %% 2), (location %% 2)),
+    locationX_code = locationX %>% recode_factor(
+      `1` = "FAR",
+      `0` = "NEAR"
+      ),
+    locationY = ceiling(location/2) - 1,
+    time_fin = ifelse(correct, time / 1000, NA),
+)
+
+```
+
+
+### learning effect - gesture error
+
+```{r warning=FALSE}
+
+log_block_errors <- logs %>%
+  group_by(id, block, type_code) %>%
+  summarize(
+    errors_ave = sum(errors) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id, block, type_code)
+
+log_errors_summary <- log_block_errors  %>%
+  group_by(block, type_code) %>%
+  summarize(
+    meanErrors = errors_ave %>% mean(na.rm=TRUE),
+    lowCIErrors = ci(errors_ave)[2] %>% pmax(0),
+    highCIErrors = ci(errors_ave)[3] %>% pmin(2),
+    sdErrors = ci(errors_ave)[4],
+    stdErrors = sd(errors_ave)) %>%
+  ungroup() %>%
+  arrange(block, type_code)
+
+log_errors_summary
+
+pd <- position_dodge(width = 0.3)
+log_errors_summary %>% ggplot(
+  aes(
+    x = block,
+    y = meanErrors,
+    ymin = lowCIErrors,
+    ymax = highCIErrors,
+    color = type_code
+  )
+) +
+  geom_line(position = pd) +
+  geom_pointrange(position = pd) 
+
+shapiro.test(log_block_errors$errors_ave)
+
+qqnorm(log_block_errors$errors_ave); qqline(log_block_errors$errors_ave, col = 2)
+qqplot(log_block_errors$errors_ave, rt(300, df = 5))
+
+library(lme4)
+library(lmerTest)
+library(car)
+
+log_block_errors$id = factor(log_block_errors$id)
+contrasts(log_block_errors$block) <-"contr.sum"
+contrasts(log_block_errors$type_code) <-"contr.sum"
+m = glmer(errors_ave ~ block*type_code + (1|id), data=log_block_errors, family=poisson)
+# use family=quasipoissonif overdispersion
+Anova(m, type=3)
+
+
+```
+#### no learning effect, use all trials
+
+
+### Fold interaction
+
+#### gesture time
+```{r warning=FALSE}
+
+gesture_level <- c("INWARD_SMALL", "INWARD_MEDIUM", "INWARD_LARGE", "OUTWARD_SMALL", "OUTWARD_MEDIUM", "OUTWARD_LARGE")
+
+fold_trials <- logs %>%
+  filter(type_code == "FOLD") %>%
+  mutate(
+    gesture_code = fct_relevel(paste(direction_code, angle_code, sep = "_"), 
+            "INWARD_SMALL", "INWARD_MEDIUM", "INWARD_LARGE", "OUTWARD_SMALL", "OUTWARD_MEDIUM", "OUTWARD_LARGE"),
+      )
+
+
+fold_time <- fold_trials %>%
+  filter(correct == TRUE)
+
+
+average_time <-fold_time %>%
+  group_by(id,gesture_code) %>%
+  summarize(
+    averageTime = sum(time_fin) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id, gesture_code)
+
+participants_fold_time <- full_join(average_time, participants)
+
+
+time_summary <-average_time %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2]%>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = averageTime %>% sd())
+
+time_summary
+
+# line + dot
+time_graph <- ggplot(time_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanTime, ymin=lowCITime, ymax=highCITime), colour="#566573", alpha=0.9, size=0.8) +
+  scale_y_continuous(limits=c(0.5,2.5)) +
+  coord_flip()
+
+time_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+#ggsave("time_fold.pdf", width = 4, height = 3)
+
+# time_direction_summary <-fold_time %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanTime = time_fin %>% mean(na.rm=TRUE),
+#     lowCITime = ci(time_fin)[2]%>% pmax(0),
+#     highCITime = ci(time_fin)[3],
+#     sdTime = ci(time_fin)[4],
+#     stdTime = time_fin %>% sd())
+# 
+# time_direction_summary
+# 
+# # line + dot
+# time_graph <- ggplot(time_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanTime, ymin=lowCITime, ymax=highCITime), colour="#EB984E", alpha=0.9, size=0.8) +
+#   scale_y_continuous(limits=c(0.5,2.0)) +
+#   coord_flip()
+# 
+# time_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("time_fold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+fold_average_time <-fold_time %>%
+  group_by(id, direction_code, angle_code) %>%
+  summarize(
+    averageTime = sum(time_fin) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id, direction_code, angle_code)
+
+fold_time_data <- fold_average_time %>%
+  group_by(direction_code, angle_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+print(fold_time_data)
+
+fold_time_direction_summary <-fold_average_time %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+fold_time_direction_summary
+
+
+fold_time_angle_summary <-fold_average_time %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+fold_time_angle_summary
+
+
+shapiro.test(fold_average_time$averageTime)
+
+qqnorm(fold_average_time$averageTime); qqline(fold_average_time$averageTime, col = 2)
+qqplot(fold_average_time$averageTime, rt(300, df = 5))
+
+library(rcompanion)
+
+plotNormalHistogram(fold_average_time$averageTime)
+
+fold_average_time$time_turkey =
+     transformTukey(fold_average_time$averageTime,
+                     plotit=FALSE)
+plotNormalHistogram(fold_average_time$time_turkey)
+
+shapiro.test(fold_average_time$time_turkey)
+
+library("ez")
+fold_average_time$id= factor(fold_average_time$id)
+ezANOVA(fold_average_time, dv=.(time_turkey), wid=.(id), within=.(direction_code, angle_code))
+```
+#### pairwise comparisons
+```{r warning=FALSE}
+pairwise.t.test(fold_average_time$time_turkey, fold_average_time$direction_code, p.adjust="bonf")
+
+pairwise.t.test(fold_average_time$time_turkey, fold_average_time$angle_code, p.adjust="bonf")
+```
+
+#### gesture error
+```{r warning=FALSE}
+
+fold_errors <- fold_trials %>%
+  group_by(id, direction_code, angle_code) %>%
+  summarize(
+    errors_ave = sum(errors) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id,  direction_code, angle_code) %>%
+  mutate(
+    gesture_code = fct_relevel(paste(direction_code, angle_code, sep = "_"), 
+            "INWARD_SMALL", "INWARD_MEDIUM", "INWARD_LARGE", "OUTWARD_SMALL", "OUTWARD_MEDIUM", "OUTWARD_LARGE"),
+      )
+
+participants_fold_errors <- full_join(fold_errors, participants)
+
+error_summary <-fold_errors %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+error_summary
+
+# line + dot
+error_graph <- ggplot(error_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanError, ymin=lowCIError, ymax=highCIError), colour="#c0392b", alpha=0.9, size=0.8) +
+  scale_y_continuous(limits=c(0.0,1.5)) +
+  coord_flip()
+
+error_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+#ggsave("error_fold.pdf", width = 4, height = 3)
+
+# error_direction_summary <-fold_errors %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanError = errors_ave %>% mean(na.rm=TRUE),
+#     lowCIError = ci(errors_ave)[2]%>% pmax(0),
+#     highCIError = ci(errors_ave)[3]%>% pmin(2),
+#     sdError = ci(errors_ave)[4],
+#     stdError = errors_ave %>% sd())
+# 
+# 
+# error_direction_summary
+# 
+# # line + dot
+# error_graph <- ggplot(error_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanError, ymin=lowCIError, ymax=highCIError), colour="#A569BD", alpha=0.9, size=0.8) +
+#   scale_y_continuous(limits=c(0.0,1.5)) +
+#   coord_flip()
+# 
+# error_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("error_fold_direction.pdf", width = 4, height = 1)
+
+
+```
+
+#### analysis
+
+```{r warning=FALSE}
+
+
+fold_error_data <- fold_errors %>%
+  group_by(direction_code, angle_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+print(fold_error_data)
+
+fold_error_direction_summary <-fold_errors %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+fold_error_direction_summary
+
+
+fold_error_angle_summary <-fold_errors %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+fold_error_angle_summary
+
+
+shapiro.test(fold_errors$errors_ave)
+
+qqnorm(fold_errors$errors_ave); qqline(fold_errors$errors_ave, col = 2)
+qqplot(fold_errors$errors_ave, rt(300, df = 5))
+
+library(lme4)
+library(lmerTest)
+library(car)
+
+fold_errors$id = factor(fold_errors$id)
+contrasts(fold_errors$direction_code) <-"contr.sum"
+contrasts(fold_errors$angle_code) <-"contr.sum"
+m = glmer(errors_ave ~ direction_code*angle_code + (1|id), data=fold_errors, family=poisson)
+# use family=quasipoissonif overdispersion
+Anova(m, type=3)
+```
+
+### Touch-enhanced Fold interaction
+
+#### gesture time
+```{r warning=FALSE}
+
+gesture_level <- c("INWARD_FAR_0", "INWARD_NEAR_0", "INWARD_FAR_1", "INWARD_NEAR_1", "INWARD_FAR_2", "INWARD_NEAR_2", "INWARD_FAR_3", "INWARD_NEAR_3", "OUTWARD_FAR_0", "OUTWARD_NEAR_0", "OUTWARD_FAR_1", "OUTWARD_NEAR_1", "OUTWARD_FAR_2", "OUTWARD_NEAR_2", "OUTWARD_FAR_3", "OUTWARD_NEAR_3")
+
+touchfold_trials <- logs %>%
+  filter(type_code == "TOUCHFOLD") %>%
+  mutate(
+    gesture_code = fct_relevel(paste(direction_code, locationX_code, locationY, sep = "_"), 
+            "INWARD_FAR_0", "INWARD_NEAR_0", "INWARD_FAR_1", "INWARD_NEAR_1", "INWARD_FAR_2", "INWARD_NEAR_2", "INWARD_FAR_3", "INWARD_NEAR_3", "OUTWARD_FAR_0", "OUTWARD_NEAR_0", "OUTWARD_FAR_1", "OUTWARD_NEAR_1", "OUTWARD_FAR_2", "OUTWARD_NEAR_2", "OUTWARD_FAR_3", "OUTWARD_NEAR_3"),
+      )
+
+
+touchfold_time <- touchfold_trials %>%
+  filter(correct == TRUE)
+
+average_time <-touchfold_time %>%
+  group_by(id,gesture_code) %>%
+  summarize(
+    averageTime = sum(time_fin) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id, gesture_code)
+
+participants_touchfold_time <- full_join(average_time, participants)
+
+
+time_summary <-average_time %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2]%>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = averageTime %>% sd())
+
+time_summary
+
+# line + dot
+time_graph <- ggplot(time_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanTime, ymin=lowCITime, ymax=highCITime), colour="#566573", alpha=0.9, size=0.8) +
+  scale_y_continuous(limits=c(0.5,2.5)) +
+  coord_flip()
+
+time_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+#ggsave("time_touchfold.pdf", width = 4, height = 8)
+
+# time_direction_summary <-touchfold_time %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanTime = time_fin %>% mean(na.rm=TRUE),
+#     lowCITime = ci(time_fin)[2]%>% pmax(0),
+#     highCITime = ci(time_fin)[3],
+#     sdTime = ci(time_fin)[4],
+#     stdTime = time_fin %>% sd())
+# 
+# time_direction_summary
+# 
+# # line + dot
+# time_graph <- ggplot(time_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanTime, ymin=lowCITime, ymax=highCITime), colour="#EB984E", alpha=0.9, size=0.8) +
+#   scale_y_continuous(limits=c(0.5,2.0)) +
+#   coord_flip()
+# 
+# time_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("time_touchfold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+touchfold_average_time <-touchfold_time %>%
+  group_by(id, direction_code, locationX_code, locationY) %>%
+  summarize(
+    averageTime = sum(time_fin) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id, direction_code, locationX_code, locationY)
+
+touchfold_time_data <- touchfold_average_time %>%
+  group_by(direction_code, locationX_code, locationY) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+print(touchfold_time_data)
+
+touchfold_time_direction_summary <-touchfold_average_time %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+touchfold_time_direction_summary
+
+
+touchfold_time_X_summary <-touchfold_average_time %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+touchfold_time_X_summary
+
+touchfold_time_Y_summary <-touchfold_average_time %>%
+  group_by(locationY) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+touchfold_time_Y_summary
+
+touchfold_time_dir_X_summary <-touchfold_average_time %>%
+  group_by(direction_code, locationX_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+touchfold_time_dir_X_summary
+
+
+shapiro.test(touchfold_average_time$averageTime)
+
+qqnorm(touchfold_average_time$averageTime); qqline(touchfold_average_time$averageTime, col = 2)
+qqplot(touchfold_average_time$averageTime, rt(300, df = 5))
+
+library(rcompanion)
+
+plotNormalHistogram(touchfold_average_time$averageTime)
+
+touchfold_average_time$time_turkey =
+     transformTukey(touchfold_average_time$averageTime,
+                     plotit=FALSE)
+plotNormalHistogram(touchfold_average_time$time_turkey)
+
+shapiro.test(touchfold_average_time$time_turkey)
+
+library("ez")
+touchfold_average_time$id= factor(touchfold_average_time$id)
+touchfold_average_time$locationY= factor(touchfold_average_time$locationY)
+ezANOVA(touchfold_average_time, dv=.(time_turkey), wid=.(id), within=.(direction_code, locationX_code, locationY))
+```
+#### pairwise comparisons
+```{r warning=FALSE}
+pairwise.t.test(touchfold_average_time$time_turkey, touchfold_average_time$direction_code, p.adjust="bonf")
+
+pairwise.t.test(touchfold_average_time$time_turkey, touchfold_average_time$locationY, p.adjust="bonf")
+
+pairwise.t.test(touchfold_average_time$time_turkey, interaction(touchfold_average_time$direction_code, touchfold_average_time$locationX_code), p.adjust="bonf")
+```
+
+#### gesture error
+```{r warning=FALSE}
+
+touchfold_errors <- touchfold_trials %>%
+  group_by(id, direction_code, locationX_code, locationY) %>%
+  summarize(
+    errors_ave = sum(errors) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id,  direction_code, locationX_code, locationY) %>%
+  mutate(
+    gesture_code = fct_relevel(paste(direction_code, locationX_code, locationY, sep = "_"), 
+            "INWARD_FAR_0", "INWARD_NEAR_0", "INWARD_FAR_1", "INWARD_NEAR_1", "INWARD_FAR_2", "INWARD_NEAR_2", "INWARD_FAR_3", "INWARD_NEAR_3", "OUTWARD_FAR_0", "OUTWARD_NEAR_0", "OUTWARD_FAR_1", "OUTWARD_NEAR_1", "OUTWARD_FAR_2", "OUTWARD_NEAR_2", "OUTWARD_FAR_3", "OUTWARD_NEAR_3"),
+      )
+
+participants_touchfold_errors <- full_join(touchfold_errors, participants)
+
+
+error_summary <-touchfold_errors %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+error_summary
+
+# line + dot
+error_graph <- ggplot(error_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanError, ymin=lowCIError, ymax=highCIError), colour="#c0392b", alpha=0.9, size=0.8) +
+  scale_y_continuous(limits=c(0.0,1.5)) +
+  coord_flip()
+
+error_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+#ggsave("error_touchfold.pdf", width = 4, height = 8)
+
+# error_direction_summary <-touchfold_errors %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanError = errors_ave %>% mean(na.rm=TRUE),
+#     lowCIError = ci(errors_ave)[2]%>% pmax(0),
+#     highCIError = ci(errors_ave)[3]%>% pmin(2),
+#     sdError = ci(errors_ave)[4],
+#     stdError = errors_ave %>% sd())
+# 
+# 
+# error_direction_summary
+# 
+# # line + dot
+# error_graph <- ggplot(error_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanError, ymin=lowCIError, ymax=highCIError), colour="#A569BD", alpha=0.9, size=0.8) +
+#   scale_y_continuous(limits=c(0.0,1.5)) +
+#   coord_flip()
+# 
+# error_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("error_touchfold_direction.pdf", width = 4, height = 1)
+
+
+```
+
+#### analysis
+
+```{r warning=FALSE}
+
+
+touchfold_error_data <- touchfold_errors %>%
+  group_by(direction_code, locationX_code, locationY) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+print(touchfold_error_data)
+
+touchfold_error_direction_summary <-touchfold_errors %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+touchfold_error_direction_summary
+
+
+touchfold_error_X_summary <-touchfold_errors %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+touchfold_error_X_summary
+
+touchfold_error_Y_summary <-touchfold_errors %>%
+  group_by(locationY) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+touchfold_error_Y_summary
+
+
+shapiro.test(touchfold_errors$errors_ave)
+
+qqnorm(touchfold_errors$errors_ave); qqline(touchfold_errors$errors_ave, col = 2)
+qqplot(touchfold_errors$errors_ave, rt(300, df = 5))
+
+library(lme4)
+library(lmerTest)
+library(car)
+
+touchfold_errors$id = factor(touchfold_errors$id)
+touchfold_errors$locationY = factor(touchfold_errors$locationY)
+contrasts(touchfold_errors$direction_code) <-"contr.sum"
+contrasts(touchfold_errors$locationX_code) <-"contr.sum"
+contrasts(touchfold_errors$locationY) <-"contr.sum"
+m = glmer(errors_ave ~ direction_code*locationX_code*locationY + (1|id), data=touchfold_errors, family=poisson)
+# use family=quasipoissonif overdispersion
+Anova(m, type=3)
+```
+
+
+### Fold-enhanced Touch interaction
+##### remove id 18 due to one missing cell
+
+#### gesture time
+```{r warning=FALSE}
+
+gesture_level <- c("SMALL_FAR_1", "SMALL_NEAR_1", "SMALL_FAR_2", "SMALL_NEAR_2", "MEDIUM_FAR_1", "MEDIUM_NEAR_1", "MEDIUM_FAR_2", "MEDIUM_NEAR_2")
+
+foldtouch_trials <- logs %>%
+  filter(type_code == "FOLDTOUCH") %>%
+  mutate(
+    gesture_code = fct_relevel(paste(angle_code, locationX_code, locationY, sep = "_"), 
+            "SMALL_FAR_1", "SMALL_NEAR_1", "SMALL_FAR_2", "SMALL_NEAR_2", "MEDIUM_FAR_1", "MEDIUM_NEAR_1", "MEDIUM_FAR_2", "MEDIUM_NEAR_2"),
+      )
+
+
+foldtouch_time_trials <- foldtouch_trials %>%
+  filter(id != 18)
+
+
+foldtouch_time <- foldtouch_time_trials %>%
+  filter(correct == TRUE)
+
+average_time <-foldtouch_time %>%
+  group_by(id,gesture_code) %>%
+  summarize(
+    averageTime = sum(time_fin) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id, gesture_code)
+
+participants_foldtouch_time <- full_join(average_time, participants)
+
+
+time_summary <-average_time %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2]%>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = averageTime %>% sd())
+
+time_summary
+
+# line + dot
+time_graph <- ggplot(time_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanTime, ymin=lowCITime, ymax=highCITime), colour="#566573", alpha=0.9, size=0.8) +
+  scale_y_continuous(limits=c(0.5,2.5)) +
+  coord_flip()
+
+time_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+#ggsave("time_foldtouch.pdf", width = 4, height = 4)
+
+# time_angle_summary <-foldtouch_time %>%
+#   group_by(angle_code) %>%
+#   summarize(
+#     meanTime = time_fin %>% mean(na.rm=TRUE),
+#     lowCITime = ci(time_fin)[2]%>% pmax(0),
+#     highCITime = ci(time_fin)[3],
+#     sdTime = ci(time_fin)[4],
+#     stdTime = time_fin %>% sd())
+# 
+# time_angle_summary
+# 
+# # line + dot
+# time_graph <- ggplot(time_angle_summary) +
+#   geom_pointrange( aes(x=angle_code, y=meanTime, ymin=lowCITime, ymax=highCITime), colour="#EB984E", alpha=0.9, size=0.8) +
+#   scale_y_continuous(limits=c(0.5,2.0)) +
+#   coord_flip()
+# 
+# time_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("time_foldtouch_angle.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+
+```{r warning=FALSE}
+
+foldtouch_average_time <-foldtouch_time %>%
+  group_by(id, angle_code, locationX_code, locationY) %>%
+  summarize(
+    averageTime = sum(time_fin) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id, angle_code, locationX_code, locationY)
+
+foldtouch_time_data <- foldtouch_average_time %>%
+  group_by(angle_code, locationX_code, locationY) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+print(foldtouch_time_data)
+
+foldtouch_time_angle_summary <-foldtouch_average_time %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+foldtouch_time_angle_summary
+
+
+foldtouch_time_X_summary <-foldtouch_average_time %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+foldtouch_time_X_summary
+
+foldtouch_time_Y_summary <-foldtouch_average_time %>%
+  group_by(locationY) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+foldtouch_time_Y_summary
+
+
+shapiro.test(foldtouch_average_time$averageTime)
+
+qqnorm(foldtouch_average_time$averageTime); qqline(foldtouch_average_time$averageTime, col = 2)
+qqplot(foldtouch_average_time$averageTime, rt(300, df = 5))
+
+library(rcompanion)
+
+plotNormalHistogram(foldtouch_average_time$averageTime)
+
+foldtouch_average_time$time_turkey =
+     transformTukey(foldtouch_average_time$averageTime,
+                     plotit=FALSE)
+plotNormalHistogram(foldtouch_average_time$time_turkey)
+
+shapiro.test(foldtouch_average_time$time_turkey)
+
+library("ez")
+foldtouch_average_time$id= factor(foldtouch_average_time$id)
+foldtouch_average_time$locationY= factor(foldtouch_average_time$locationY)
+ezANOVA(foldtouch_average_time, dv=.(time_turkey), wid=.(id), within=.(angle_code, locationX_code, locationY))
+```
+#### pairwise comparisons
+```{r warning=FALSE}
+pairwise.t.test(foldtouch_average_time$time_turkey, foldtouch_average_time$angle_code, p.adjust="bonf")
+```
+
+#### gesture error
+```{r warning=FALSE}
+
+foldtouch_errors <- foldtouch_trials %>%
+  group_by(id, angle_code, locationX_code, locationY) %>%
+  summarize(
+    errors_ave = sum(errors) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id,  angle_code, locationX_code, locationY) %>%
+  mutate(
+    gesture_code = fct_relevel(paste(angle_code, locationX_code, locationY, sep = "_"), 
+            "SMALL_FAR_1", "SMALL_NEAR_1", "SMALL_FAR_2", "SMALL_NEAR_2", "MEDIUM_FAR_1", "MEDIUM_NEAR_1", "MEDIUM_FAR_2", "MEDIUM_NEAR_2"),
+      )
+
+participants_foldtouch_errors <- full_join(foldtouch_errors, participants)
+
+
+error_summary <-foldtouch_errors %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+error_summary
+
+# line + dot
+error_graph <- ggplot(error_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanError, ymin=lowCIError, ymax=highCIError), colour="#c0392b", alpha=0.9, size=0.8) +
+  scale_y_continuous(limits=c(0.0,1.5)) +
+  coord_flip()
+
+error_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+#ggsave("error_foldtouch.pdf", width = 4, height = 4)
+
+# error_angle_summary <-foldtouch_errors %>%
+#   group_by(angle_code) %>%
+#   summarize(
+#     meanError = errors_ave %>% mean(na.rm=TRUE),
+#     lowCIError = ci(errors_ave)[2]%>% pmax(0),
+#     highCIError = ci(errors_ave)[3]%>% pmin(2),
+#     sdError = ci(errors_ave)[4],
+#     stdError = errors_ave %>% sd())
+# 
+# 
+# error_angle_summary
+# 
+# # line + dot
+# error_graph <- ggplot(error_angle_summary) +
+#   geom_pointrange( aes(x=angle_code, y=meanError, ymin=lowCIError, ymax=highCIError), colour="#A569BD", alpha=0.9, size=0.8) +
+#   scale_y_continuous(limits=c(0.0,1.5)) +
+#   coord_flip()
+# 
+# error_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("error_foldtouch_angle.pdf", width = 4, height = 1)
+
+
+```
+
+#### analysis
+
+```{r warning=FALSE}
+
+
+foldtouch_error_data <- foldtouch_errors %>%
+  group_by(angle_code, locationX_code, locationY) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+print(foldtouch_error_data)
+
+foldtouch_error_angle_summary <-foldtouch_errors %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+foldtouch_error_angle_summary
+
+
+foldtouch_error_X_summary <-foldtouch_errors %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+foldtouch_error_X_summary
+
+foldtouch_error_Y_summary <-foldtouch_errors %>%
+  group_by(locationY) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+foldtouch_error_Y_summary
+
+
+shapiro.test(foldtouch_errors$errors_ave)
+
+qqnorm(foldtouch_errors$errors_ave); qqline(foldtouch_errors$errors_ave, col = 2)
+qqplot(foldtouch_errors$errors_ave, rt(300, df = 5))
+
+library(lme4)
+library(lmerTest)
+library(car)
+
+foldtouch_errors$id = factor(foldtouch_errors$id)
+foldtouch_errors$locationY = factor(foldtouch_errors$locationY)
+contrasts(foldtouch_errors$angle_code) <-"contr.sum"
+contrasts(foldtouch_errors$locationX_code) <-"contr.sum"
+contrasts(foldtouch_errors$locationY) <-"contr.sum"
+m = glmer(errors_ave ~ angle_code*locationX_code*locationY + (1|id), data=foldtouch_errors, family=poisson)
+# use family=quasipoissonif overdispersion
+Anova(m, type=3)
+```
+
+#### pairwise comparison
+```{r warning = FALSE}
+# dfhas subjects (S),two factors (X1,X2) each w/levels (a,b), and count response (Y)
+library(multcomp) # for glht
+library(emmeans) # for emm, emmeans
+summary(glht(m, emm(pairwise ~ locationY)), test=adjusted(type="holm"))
+```
+
+### interaction
+#### gesture time
+```{r warning = FALSE}
+
+time_data <- logs %>%
+  filter(correct == TRUE)
+
+average_time <-time_data %>%
+  group_by(id,type_code) %>%
+  summarize(
+    averageTime = sum(time_fin) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id, type_code)
+
+time_summary <-average_time %>%
+  group_by(type_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2]%>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = averageTime %>% sd())
+
+time_summary
+
+# line + dot
+time_graph <- ggplot(time_summary) +
+  geom_pointrange( aes(x=type_code, y=meanTime, ymin=lowCITime, ymax=highCITime), colour="#566573", alpha=0.9, size=0.8) +
+  scale_y_continuous(limits=c(0.5,2.5)) +
+  coord_flip()
+
+time_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+#ggsave("time_type.pdf", width = 4, height = 1.5)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+average_time <-time_data %>%
+  group_by(id,type_code) %>%
+  summarize(
+    averageTime = sum(time_fin) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id, type_code)
+
+time_type_summary <- average_time %>%
+  group_by(type_code) %>%
+  summarize(
+    meanTime = averageTime %>% mean(na.rm=TRUE),
+    lowCITime = ci(averageTime)[2] %>% pmax(0),
+    highCITime = ci(averageTime)[3],
+    sdTime = ci(averageTime)[4],
+    stdTime = sd(averageTime))
+
+print(time_type_summary)
+
+
+
+shapiro.test(average_time$averageTime)
+
+qqnorm(average_time$averageTime); qqline(average_time$averageTime, col = 2)
+qqplot(average_time$averageTime, rt(300, df = 5))
+
+library(rcompanion)
+
+plotNormalHistogram(average_time$averageTime)
+
+average_time$time_turkey =
+     transformTukey(average_time$averageTime,
+                     plotit=FALSE)
+plotNormalHistogram(average_time$time_turkey)
+
+shapiro.test(average_time$time_turkey)
+
+library("ez")
+average_time$id= factor(average_time$id)
+ezANOVA(average_time, dv=.(time_turkey), wid=.(id), within=.(type_code))
+```
+
+#### pairwise comparisons
+```{r warning=FALSE}
+pairwise.t.test(average_time$time_turkey, average_time$type_code, p.adjust="bonf")
+```
+
+#### gesture error
+```{r warning=FALSE}
+
+errors_data <- logs %>%
+  group_by(id, type_code) %>%
+  summarize(
+    errors_ave = sum(errors) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id,  type_code)
+
+error_summary <-errors_data %>%
+  group_by(type_code) %>%
+  summarize(
+    meanError = errors_ave %>% mean(na.rm=TRUE),
+    lowCIError = ci(errors_ave)[2]%>% pmax(0),
+    highCIError = ci(errors_ave)[3]%>% pmin(2),
+    sdError = ci(errors_ave)[4],
+    stdError = errors_ave %>% sd())
+
+error_summary
+
+# line + dot
+error_graph <- ggplot(error_summary) +
+  geom_pointrange( aes(x=type_code, y=meanError, ymin=lowCIError, ymax=highCIError), colour="#c0392b", alpha=0.9, size=0.8) +
+  scale_y_continuous(limits=c(0.0,1.5)) +
+  coord_flip()
+
+error_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+#ggsave("error_type.pdf", width = 4, height = 1.5)
+
+
+
+```
+
+#### analysis
+
+```{r warning=FALSE}
+
+
+shapiro.test(errors_data$errors_ave)
+
+qqnorm(errors_data$errors_ave); qqline(errors_data$errors_ave, col = 2)
+qqplot(errors_data$errors_ave, rt(300, df = 5))
+
+library(coin)
+errors_data$id= factor(errors_data$id) # Subjectid must be nominal
+friedman_test(errors_ave~ type_code | id, data=errors_data, distribution="asymptotic")
+```
+#### pairwise
+```{r warning=FALSE}
+library(reshape2) # for dcast
+errors_data2 <-dcast(errors_data, id ~ type_code, value.var="errors_ave") # make wide-format table
+ab = wilcox.test(errors_data2$FOLDTOUCH, errors_data2$TOUCHFOLD, paired=TRUE) # a vs. b
+ac = wilcox.test(errors_data2$FOLDTOUCH, errors_data2$FOLD, paired=TRUE) # a vs. c
+bc= wilcox.test(errors_data2$TOUCHFOLD, errors_data2$FOLD, paired=TRUE) # b vs. c
+p.adjust(c(ab$p.value, ac$p.value, bc$p.value), method="holm")
+
+```
+
+### correlation
+
+```{r warning=FALSE}
+
+library("ggpubr")
+res <- cor.test(participants_fold_time$averageTime, participants_fold_time$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_time, x = "handLength", y = "averageTime", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "averageTime")
+
+res <- cor.test(participants_fold_time$averageTime, participants_fold_time$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_time, x = "handWidth", y = "averageTime", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "averageTime")
+
+res <- cor.test(participants_fold_errors$errors_ave, participants_fold_errors$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_errors, x = "handLength", y = "errors_ave", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "errors_ave")
+
+res <- cor.test(participants_fold_errors$errors_ave, participants_fold_errors$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_errors, x = "handWidth", y = "errors_ave", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "errors_ave")
+
+res <- cor.test(participants_touchfold_time$averageTime, participants_touchfold_time$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_time, x = "handLength", y = "averageTime", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "averageTime")
+
+res <- cor.test(participants_touchfold_time$averageTime, participants_touchfold_time$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_time, x = "handWidth", y = "averageTime", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "averageTime")
+
+res <- cor.test(participants_touchfold_errors$errors_ave, participants_touchfold_errors$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_errors, x = "handLength", y = "errors_ave", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "errors_ave")
+
+res <- cor.test(participants_touchfold_errors$errors_ave, participants_touchfold_errors$handWidth, 
+                    method = "spearman")
+res
+
+
+ggscatter(participants_touchfold_errors, x = "handWidth", y = "errors_ave", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "errors_ave")
+
+res <- cor.test(participants_foldtouch_time$averageTime, participants_foldtouch_time$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_time, x = "handLength", y = "averageTime", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "averageTime")
+
+res <- cor.test(participants_foldtouch_time$averageTime, participants_foldtouch_time$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_time, x = "handWidth", y = "averageTime", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "averageTime")
+
+res <- cor.test(participants_foldtouch_errors$errors_ave, participants_foldtouch_errors$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_errors, x = "handLength", y = "errors_ave", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "errors_ave")
+
+res <- cor.test(participants_foldtouch_errors$errors_ave, participants_foldtouch_errors$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_errors, x = "handWidth", y = "errors_ave", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "errors_ave")
+```

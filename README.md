@@ -5,6 +5,6 @@ Supplementary materials for the CHI 2024 paper:
 
 ## Project Structure
 
--   `prototype` contains the chematics, 3D models, and software for proposed modified clamshell flip phone.
+-   `prototype` contains the 3D model schematics, and arduino software for proposed modified clamshell flip phone.
 -   `visualization` contains the software of 3D visualization.
--   `stats` contains the data and statistics for the experiment. Each subfolder has `.csv` files with quantitative data from the experiment 1 and `.rmd` files for analysing the data.
+-   `stats` contains the data and statistics for the experiment. This folder has `.csv` files with quantitative data from the experiment and `.rmd` files for analysing the data.

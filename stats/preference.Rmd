@@ -1,0 +1,2392 @@
+---
+title: "exp preference"
+author: "Allen Yeh"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```
+```
+
+```{r warning=FALSE}
+library(tidyverse)
+library(gmodels)
+library(rstatix)
+library(ggplot2)
+library(ez)
+library(ARTool)
+library(emmeans)
+```
+
+### Import data
+
+#### Read the csv file and claim the data type
+```{r}
+category_level <- c("easiness", "comfort", "confidence", "social")
+
+participants <- read_csv("participants-short.csv", col_types = cols(
+  id = col_integer(),
+  gender = col_factor(levels = c("Male","Female")), 
+  age = col_integer(), 
+  handed = col_factor(levels = c("Right","Left")), 
+  phoneExperience = col_factor(levels = c("-3","3-5", "6-10", "10-")),
+  phoneSize = col_factor(levels = c("-4", "4-5", "5-6", "6-")), 
+  dailyUsage = col_factor(levels = c("-1", "1-2", "2-4", "4-8", "8-")), 
+  handLength = col_double(),
+  handWidth = col_double()
+)) %>%
+  mutate(
+    phoneSize_Num = phoneSize  %>%  recode(
+          "-4" = 1,
+          "4-5" = 2,
+          "5-6" = 3,
+          "6-" = 4
+          )
+      )
+
+lefthanded_ids <- c(14, 11)
+
+
+data <- read_csv("summaryPreference.csv", col_types = cols(
+  id = col_integer(),
+  type = col_factor(levels = c("0", "1", "2")),
+  direction = col_factor(levels = c("0", "1")), 
+  angle = col_factor(levels = c("-1", "0", "1", "2")),
+  location = col_integer(),
+  category = col_factor(levels = category_level),
+  rating = col_integer()
+  )) %>%
+  mutate(
+    type_code = type %>% recode_factor(
+      `2` = "FOLDTOUCH",  
+      `1` = "TOUCHFOLD",
+      `0` = "FOLD"
+      ),
+    direction_code = direction %>% recode_factor(
+      `1` = "OUTWARD",
+      `0` = "INWARD"
+      ),
+    angle_code = angle %>% recode_factor(
+      `2` = "LARGE",
+      `1` = "MEDIUM",
+      `0` = "SMALL",
+      `-1` = "NONE"
+      ),
+    locationX = ifelse(id %in% lefthanded_ids, (1 - location %% 2), (location %% 2)),
+    locationX_code = locationX %>% recode_factor(
+      `1` = "FAR",
+      `0` = "NEAR"
+      ),
+    locationY = ceiling(location/2) - 1,
+)
+
+
+```
+
+
+
+
+### Fold interaction
+
+#### Ease
+```{r warning=FALSE}
+
+gesture_level <- c("INWARD_SMALL", "INWARD_MEDIUM", "INWARD_LARGE", "OUTWARD_SMALL", "OUTWARD_MEDIUM", "OUTWARD_LARGE")
+
+fold_trials <- data %>%
+  filter(type_code == "FOLD") %>%
+  mutate(
+    gesture_code = fct_relevel(paste(direction_code, angle_code, sep = "_"), 
+            "INWARD_SMALL", "INWARD_MEDIUM", "INWARD_LARGE", "OUTWARD_SMALL", "OUTWARD_MEDIUM", "OUTWARD_LARGE"),
+      )
+
+fold_ease <- fold_trials %>%
+  filter(category == "easiness")
+
+participants_fold_ease <- full_join(fold_ease, participants)
+
+boxplot(rating~gesture_code,data=fold_ease, main="Ease",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+fold_ease_summary <-fold_ease %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_ease_summary
+
+# line + dot
+ease_graph <- ggplot(fold_ease_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#28b463", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+ease_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("ease_fold.pdf", width = 4, height = 3)
+
+# fold_ease_direction_summary <-fold_ease %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# ease_graph <- ggplot(fold_ease_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#28b463", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# ease_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("ease_fold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+fold_data_summary <-fold_ease %>%
+  group_by(direction_code, angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_data_summary
+
+fold_direction_summary <-fold_ease %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_direction_summary
+
+
+fold_angle_summary <-fold_ease %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_angle_summary
+
+shapiro.test(fold_ease$rating)
+
+fold_ease$id = factor(fold_ease$id)
+
+m <- art(
+  rating ~ direction_code*angle_code + (1|id),
+  data = fold_ease
+)
+
+anova(m)
+
+art.con(m, "direction_code")
+art.con(m, "angle_code")
+art.con(m, "direction_code:angle_code")
+
+
+```
+
+
+#### Comfort
+```{r warning=FALSE}
+
+
+fold_comfort <- fold_trials %>%
+  filter(category == "comfort")
+
+participants_fold_comfort <- full_join(fold_comfort, participants)
+
+boxplot(rating~gesture_code,data=fold_comfort, main="Comfort",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+fold_comfort_summary <-fold_comfort %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_comfort_summary
+
+# line + dot
+comfort_graph <- ggplot(fold_comfort_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#2e86c1", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+comfort_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("comfort_fold.pdf", width = 4, height = 3)
+
+# fold_comfort_direction_summary <-fold_comfort %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# comfort_graph <- ggplot(fold_comfort_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#2e86c1", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# comfort_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("comfort_fold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+fold_data_summary <-fold_comfort %>%
+  group_by(direction_code, angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_data_summary
+
+fold_direction_summary <-fold_comfort %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_direction_summary
+
+
+fold_angle_summary <-fold_comfort %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_angle_summary
+
+shapiro.test(fold_comfort$rating)
+
+fold_comfort$id = factor(fold_comfort$id)
+
+m <- art(
+  rating ~ direction_code*angle_code + (1|id),
+  data = fold_comfort
+)
+
+anova(m)
+
+art.con(m, "direction_code")
+art.con(m, "angle_code")
+art.con(m, "direction_code:angle_code")
+
+```
+
+#### Confidence
+```{r warning=FALSE}
+
+
+fold_confidence <- fold_trials %>%
+  filter(category == "confidence")
+
+participants_fold_confidence <- full_join(fold_confidence, participants)
+
+boxplot(rating~gesture_code,data=fold_confidence, main="Confidence",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+fold_confidence_summary <-fold_confidence %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_confidence_summary
+
+# line + dot
+confidence_graph <- ggplot(fold_confidence_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#EB984E", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+confidence_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("confidence_fold.pdf", width = 4, height = 3)
+
+# fold_confidence_direction_summary <-fold_confidence %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# confidence_graph <- ggplot(fold_confidence_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#c0392b", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# confidence_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("confidence_fold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+fold_data_summary <-fold_confidence %>%
+  group_by(direction_code, angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_data_summary
+
+fold_direction_summary <-fold_confidence %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_direction_summary
+
+
+fold_angle_summary <-fold_confidence %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_angle_summary
+
+shapiro.test(fold_confidence$rating)
+
+fold_confidence$id = factor(fold_confidence$id)
+
+m <- art(
+  rating ~ direction_code*angle_code + (1|id),
+  data = fold_confidence
+)
+
+anova(m)
+
+art.con(m, "direction_code")
+art.con(m, "angle_code")
+art.con(m, "direction_code:angle_code")
+
+```
+
+#### Social acceptance
+```{r warning=FALSE}
+
+
+fold_social <- fold_trials %>%
+  filter(category == "social")
+
+participants_fold_social <- full_join(fold_social, participants)
+
+boxplot(rating~gesture_code,data=fold_social, main="Social",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+fold_social_summary <-fold_social %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_social_summary
+
+# line + dot
+social_graph <- ggplot(fold_social_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#A569BD", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+social_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("social_fold.pdf", width = 4, height = 3)
+
+# fold_social_direction_summary <-fold_social %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# social_graph <- ggplot(fold_social_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#5d6d7e", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# social_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("social_fold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+fold_data_summary <-fold_social %>%
+  group_by(direction_code, angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_data_summary
+
+fold_direction_summary <-fold_social %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_direction_summary
+
+
+fold_angle_summary <-fold_social %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+fold_angle_summary
+
+shapiro.test(fold_social$rating)
+
+fold_social$id = factor(fold_social$id)
+
+m <- art(
+  rating ~ direction_code*angle_code + (1|id),
+  data = fold_social
+)
+
+anova(m)
+
+art.con(m, "direction_code")
+art.con(m, "angle_code")
+art.con(m, "direction_code:angle_code")
+
+```
+
+
+### Touch-enhanced Fold interaction
+
+#### Ease
+```{r warning=FALSE}
+
+touchfold_trials <- data %>%
+  filter(type_code == "TOUCHFOLD") %>%
+  mutate(
+    gesture_code = fct_relevel(paste(direction_code, locationX_code, locationY, sep = "_"), 
+            "INWARD_FAR_0", "INWARD_NEAR_0", "INWARD_FAR_1", "INWARD_NEAR_1", "INWARD_FAR_2", "INWARD_NEAR_2", "INWARD_FAR_3", "INWARD_NEAR_3", "OUTWARD_FAR_0", "OUTWARD_NEAR_0", "OUTWARD_FAR_1", "OUTWARD_NEAR_1", "OUTWARD_FAR_2", "OUTWARD_NEAR_2", "OUTWARD_FAR_3", "OUTWARD_NEAR_3"),
+      )
+
+touchfold_ease <- touchfold_trials %>%
+  filter(category == "easiness")
+
+
+participants_touchfold_ease <- full_join(touchfold_ease, participants)
+
+boxplot(rating~gesture_code,data=touchfold_ease, main="Ease",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+touchfold_ease_summary <-touchfold_ease %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_ease_summary
+
+# line + dot
+ease_graph <- ggplot(touchfold_ease_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#28b463", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+ease_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("ease_touchfold.pdf", width = 4, height = 8)
+
+# touchfold_ease_direction_summary <-touchfold_ease %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# ease_graph <- ggplot(touchfold_ease_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#28b463", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# ease_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("ease_touchfold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+touchfold_data_summary <-touchfold_ease %>%
+  group_by(direction_code, locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_data_summary
+
+touchfold_direction_summary <-touchfold_ease %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_direction_summary
+
+
+touchfold_X_summary <-touchfold_ease %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_X_summary
+
+touchfold_Y_summary <-touchfold_ease %>%
+  group_by(locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_Y_summary
+
+touchfold_direction_Y_summary <-touchfold_ease %>%
+  group_by(direction_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_direction_Y_summary
+
+shapiro.test(touchfold_ease$rating)
+
+touchfold_ease$id = factor(touchfold_ease$id)
+touchfold_ease$locationY = factor(touchfold_ease$locationY)
+
+m <- art(
+  rating ~ direction_code*locationX_code*locationY + (1|id),
+  data = touchfold_ease
+)
+
+anova(m)
+
+art.con(m, "direction_code")
+art.con(m, "locationY")
+art.con(m, "direction_code:locationY")
+
+
+```
+
+
+#### Comfort
+```{r warning=FALSE}
+
+
+touchfold_comfort <- touchfold_trials %>%
+  filter(category == "comfort")
+
+participants_touchfold_comfort <- full_join(touchfold_comfort, participants)
+
+boxplot(rating~gesture_code,data=touchfold_comfort, main="Comfort",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+touchfold_comfort_summary <-touchfold_comfort %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_comfort_summary
+
+# line + dot
+comfort_graph <- ggplot(touchfold_comfort_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#2e86c1", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+comfort_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("comfort_touchfold.pdf", width = 4, height = 8)
+
+# touchfold_comfort_direction_summary <-touchfold_comfort %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# comfort_graph <- ggplot(touchfold_comfort_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#2e86c1", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# comfort_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("comfort_touchfold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+touchfold_data_summary <-touchfold_comfort %>%
+  group_by(direction_code, locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_data_summary
+
+touchfold_direction_summary <-touchfold_comfort %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_direction_summary
+
+
+touchfold_X_summary <-touchfold_comfort %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_X_summary
+
+touchfold_Y_summary <-touchfold_comfort %>%
+  group_by(locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_Y_summary
+
+touchfold_direction_Y_summary <-touchfold_comfort %>%
+  group_by(direction_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_direction_Y_summary
+
+shapiro.test(touchfold_comfort$rating)
+
+touchfold_comfort$id = factor(touchfold_comfort$id)
+touchfold_comfort$locationY = factor(touchfold_comfort$locationY)
+
+
+m <- art(
+  rating ~ direction_code*locationX_code*locationY + (1|id),
+  data = touchfold_comfort
+)
+
+anova(m)
+
+art.con(m, "direction_code")
+art.con(m, "locationY")
+
+art.con(m, "direction_code:locationY")
+```
+
+#### Confidence
+```{r warning=FALSE}
+
+
+touchfold_confidence <- touchfold_trials %>%
+  filter(category == "confidence")
+
+participants_touchfold_confidence <- full_join(touchfold_confidence, participants)
+
+boxplot(rating~gesture_code,data=touchfold_confidence, main="Confidence",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+touchfold_confidence_summary <-touchfold_confidence %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_confidence_summary
+
+# line + dot
+confidence_graph <- ggplot(touchfold_confidence_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#EB984E", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+confidence_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("confidence_touchfold.pdf", width = 4, height = 8)
+
+# touchfold_confidence_direction_summary <-touchfold_confidence %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# confidence_graph <- ggplot(touchfold_confidence_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#c0392b", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# confidence_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("confidence_touchfold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+touchfold_data_summary <-touchfold_confidence %>%
+  group_by(direction_code, locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_data_summary
+
+touchfold_direction_summary <-touchfold_confidence %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_direction_summary
+
+
+touchfold_X_summary <-touchfold_confidence %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_X_summary
+
+touchfold_Y_summary <-touchfold_confidence %>%
+  group_by(locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_Y_summary
+
+shapiro.test(touchfold_confidence$rating)
+
+touchfold_confidence$id = factor(touchfold_confidence$id)
+touchfold_confidence$locationY = factor(touchfold_confidence$locationY)
+
+m <- art(
+  rating ~ direction_code*locationX_code*locationY + (1|id),
+  data = touchfold_confidence
+)
+
+anova(m)
+
+art.con(m, "direction_code")
+art.con(m, "locationY")
+
+```
+
+#### Social acceptance
+```{r warning=FALSE}
+
+
+touchfold_social <- touchfold_trials %>%
+  filter(category == "social")
+
+participants_touchfold_social <- full_join(touchfold_social, participants)
+
+boxplot(rating~gesture_code,data=touchfold_social, main="Social",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+touchfold_social_summary <-touchfold_social %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_social_summary
+
+# line + dot
+social_graph <- ggplot(touchfold_social_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#A569BD", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+social_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("social_touchfold.pdf", width = 4, height = 8)
+
+# touchfold_social_direction_summary <-touchfold_social %>%
+#   group_by(direction_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# social_graph <- ggplot(touchfold_social_direction_summary) +
+#   geom_pointrange( aes(x=direction_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#5d6d7e", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# social_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("social_touchfold_direction.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+touchfold_data_summary <-touchfold_social %>%
+  group_by(direction_code, locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_data_summary
+
+touchfold_direction_summary <-touchfold_social %>%
+  group_by(direction_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_direction_summary
+
+
+touchfold_X_summary <-touchfold_social %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_X_summary
+
+touchfold_Y_summary <-touchfold_social %>%
+  group_by(locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_Y_summary
+
+touchfold_direction_Y_summary <-touchfold_social %>%
+  group_by(direction_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+touchfold_direction_Y_summary
+
+shapiro.test(touchfold_social$rating)
+
+touchfold_social$id = factor(touchfold_social$id)
+touchfold_social$locationY = factor(touchfold_social$locationY)
+
+m <- art(
+  rating ~ direction_code*locationX_code*locationY + (1|id),
+  data = touchfold_social
+)
+
+anova(m)
+
+art.con(m, "direction_code")
+art.con(m, "locationY")
+art.con(m, "direction_code:locationY")
+
+```
+
+### Fold-enhanced Touch interaction
+
+#### Ease
+```{r warning=FALSE}
+
+foldtouch_trials <- data %>%
+  filter(type_code == "FOLDTOUCH") %>%
+  mutate(
+    gesture_code = fct_relevel(paste(angle_code, locationX_code, locationY, sep = "_"), 
+            "SMALL_FAR_1", "SMALL_NEAR_1", "SMALL_FAR_2", "SMALL_NEAR_2", "MEDIUM_FAR_1", "MEDIUM_NEAR_1", "MEDIUM_FAR_2", "MEDIUM_NEAR_2"),
+      )
+
+foldtouch_ease <- foldtouch_trials %>%
+  filter(category == "easiness")
+
+participants_foldtouch_ease <- full_join(foldtouch_ease, participants)
+
+boxplot(rating~gesture_code,data=foldtouch_ease, main="Ease",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+foldtouch_ease_summary <-foldtouch_ease %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_ease_summary
+
+# line + dot
+ease_graph <- ggplot(foldtouch_ease_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#28b463", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+ease_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("ease_foldtouch.pdf", width = 4, height = 4)
+
+# foldtouch_ease_angle_summary <-foldtouch_ease %>%
+#   group_by(angle_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# ease_graph <- ggplot(foldtouch_ease_angle_summary) +
+#   geom_pointrange( aes(x=angle_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#28b463", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# ease_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("ease_foldtouch_angle.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+foldtouch_data_summary <-foldtouch_ease %>%
+  group_by(angle_code, locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_data_summary
+
+foldtouch_angle_summary <-foldtouch_ease %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_angle_summary
+
+
+foldtouch_X_summary <-foldtouch_ease %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_X_summary
+
+foldtouch_Y_summary <-foldtouch_ease %>%
+  group_by(locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_Y_summary
+
+foldtouch_XY_summary <-foldtouch_ease %>%
+  group_by(locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_XY_summary
+
+
+shapiro.test(foldtouch_ease$rating)
+
+foldtouch_ease$id = factor(foldtouch_ease$id)
+foldtouch_ease$locationY = factor(foldtouch_ease$locationY)
+
+m <- art(
+  rating ~ angle_code*locationX_code*locationY + (1|id),
+  data = foldtouch_ease
+)
+
+anova(m)
+
+art.con(m, "locationX_code:locationY")
+art.con(m, "locationY")
+
+
+```
+
+
+#### Comfort
+```{r warning=FALSE}
+
+
+foldtouch_comfort <- foldtouch_trials %>%
+  filter(category == "comfort")
+
+participants_foldtouch_comfort <- full_join(foldtouch_comfort, participants)
+
+boxplot(rating~gesture_code,data=foldtouch_comfort, main="Comfort",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+foldtouch_comfort_summary <-foldtouch_comfort %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_comfort_summary
+
+# line + dot
+comfort_graph <- ggplot(foldtouch_comfort_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#2e86c1", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+comfort_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("comfort_foldtouch.pdf", width = 4, height = 4)
+
+# foldtouch_comfort_angle_summary <-foldtouch_comfort %>%
+#   group_by(angle_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# comfort_graph <- ggplot(foldtouch_comfort_angle_summary) +
+#   geom_pointrange( aes(x=angle_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#2e86c1", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# comfort_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("comfort_foldtouch_angle.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+foldtouch_data_summary <-foldtouch_comfort %>%
+  group_by(angle_code, locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_data_summary
+
+foldtouch_angle_summary <-foldtouch_comfort %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_angle_summary
+
+
+foldtouch_X_summary <-foldtouch_comfort %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_X_summary
+
+foldtouch_Y_summary <-foldtouch_comfort %>%
+  group_by(locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_Y_summary
+
+foldtouch_XY_summary <-foldtouch_comfort %>%
+  group_by(locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_XY_summary
+
+shapiro.test(foldtouch_comfort$rating)
+
+foldtouch_comfort$id = factor(foldtouch_comfort$id)
+foldtouch_comfort$locationY = factor(foldtouch_comfort$locationY)
+
+
+m <- art(
+  rating ~ angle_code*locationX_code*locationY + (1|id),
+  data = foldtouch_comfort
+)
+
+anova(m)
+
+art.con(m, "locationX_code:locationY")
+art.con(m, "locationY")
+
+```
+
+#### Confidence
+```{r warning=FALSE}
+
+
+foldtouch_confidence <- foldtouch_trials %>%
+  filter(category == "confidence")
+
+participants_foldtouch_confidence <- full_join(foldtouch_confidence, participants)
+
+boxplot(rating~gesture_code,data=foldtouch_confidence, main="Confidence",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+foldtouch_confidence_summary <-foldtouch_confidence %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_confidence_summary
+
+# line + dot
+confidence_graph <- ggplot(foldtouch_confidence_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#EB984E", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+confidence_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("confidence_foldtouch.pdf", width = 4, height = 4)
+
+# foldtouch_confidence_angle_summary <-foldtouch_confidence %>%
+#   group_by(angle_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# confidence_graph <- ggplot(foldtouch_confidence_angle_summary) +
+#   geom_pointrange( aes(x=angle_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#c0392b", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# confidence_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("confidence_foldtouch_angle.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+foldtouch_data_summary <-foldtouch_confidence %>%
+  group_by(angle_code, locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_data_summary
+
+foldtouch_angle_summary <-foldtouch_confidence %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_angle_summary
+
+
+foldtouch_X_summary <-foldtouch_confidence %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_X_summary
+
+foldtouch_Y_summary <-foldtouch_confidence %>%
+  group_by(locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_Y_summary
+
+shapiro.test(foldtouch_confidence$rating)
+
+foldtouch_confidence$id = factor(foldtouch_confidence$id)
+foldtouch_confidence$locationY = factor(foldtouch_confidence$locationY)
+
+m <- art(
+  rating ~ angle_code*locationX_code*locationY + (1|id),
+  data = foldtouch_confidence
+)
+
+anova(m)
+
+art.con(m, "locationY")
+
+```
+
+#### Social acceptance
+```{r warning=FALSE}
+
+
+foldtouch_social <- foldtouch_trials %>%
+  filter(category == "social")
+
+participants_foldtouch_social <- full_join(foldtouch_social, participants)
+
+boxplot(rating~gesture_code,data=foldtouch_social, main="Social",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+foldtouch_social_summary <-foldtouch_social %>%
+  group_by(gesture_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_social_summary
+
+# line + dot
+social_graph <- ggplot(foldtouch_social_summary) +
+  geom_pointrange( aes(x=reorder(gesture_code, desc(gesture_code)), y=meanScore, ymin=lowCI, ymax=highCI), colour="#A569BD", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+social_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("social_foldtouch.pdf", width = 4, height = 4)
+# 
+# foldtouch_social_angle_summary <-foldtouch_social %>%
+#   group_by(angle_code) %>%
+#   summarize(
+#     meanScore = rating %>% mean(na.rm=TRUE),
+#     lowCI = ci(rating)[2]%>% pmax(0),
+#     highCI = ci(rating)[3]%>% pmin(7),
+#     sd = ci(rating)[4],
+#     std = rating %>% sd())
+# 
+# # line + dot
+# social_graph <- ggplot(foldtouch_social_angle_summary) +
+#   geom_pointrange( aes(x=angle_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#5d6d7e", alpha=0.9, size=0.8) +
+#   scale_y_reverse(lim=c(7,2)) + 
+#   coord_flip()
+# 
+# social_graph + theme( # remove the vertical grid lines
+#           panel.background = element_blank(),
+#           panel.grid.major.y = element_blank() ,
+#           # explicitly set the horizontal lines (or they will disappear too)
+#           panel.grid.major.x = element_line( size=.1, color="gray" ),
+#           axis.title.x = element_blank(),
+#           axis.title.y = element_blank(),
+#           axis.text.y=element_blank()
+#     )
+# 
+# ggsave("social_foldtouch_angle.pdf", width = 4, height = 1)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+foldtouch_data_summary <-foldtouch_social %>%
+  group_by(angle_code, locationX_code, locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_data_summary
+
+foldtouch_angle_summary <-foldtouch_social %>%
+  group_by(angle_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_angle_summary
+
+
+foldtouch_X_summary <-foldtouch_social %>%
+  group_by(locationX_code) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_X_summary
+
+foldtouch_Y_summary <-foldtouch_social %>%
+  group_by(locationY) %>%
+  summarize(
+    meanScore = rating %>% mean(na.rm=TRUE),
+    lowCI = ci(rating)[2]%>% pmax(0),
+    highCI = ci(rating)[3]%>% pmin(7),
+    sd = ci(rating)[4],
+    std = rating %>% sd())
+
+foldtouch_Y_summary
+
+shapiro.test(foldtouch_social$rating)
+
+foldtouch_social$id = factor(foldtouch_social$id)
+foldtouch_social$locationY = factor(foldtouch_social$locationY)
+
+m <- art(
+  rating ~ angle_code*locationX_code*locationY + (1|id),
+  data = foldtouch_social
+)
+
+anova(m)
+
+art.con(m, "locationY")
+
+```
+
+
+### interaction
+
+
+#### Ease
+```{r warning=FALSE}
+
+
+data_ease <- data %>%
+  filter(category == "easiness")
+
+boxplot(rating~type_code,data=data_ease, main="Ease",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+rating_data <- data_ease %>%
+  group_by(id, type_code) %>%
+  summarize(
+    rating_ave = sum(rating) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id,  type_code)
+
+rating_data
+
+ease_summary <-rating_data %>%
+  group_by(type_code) %>%
+  summarize(
+    meanScore = rating_ave %>% mean(na.rm=TRUE),
+    lowCI = ci(rating_ave)[2]%>% pmax(0),
+    highCI = ci(rating_ave)[3]%>% pmin(7),
+    sd = ci(rating_ave)[4],
+    std = rating_ave %>% sd())
+
+ease_summary
+
+# line + dot
+ease_graph <- ggplot(ease_summary) +
+  geom_pointrange( aes(x=type_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#28b463", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+ease_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("ease_type.pdf", width = 4, height = 1.5)
+
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+
+shapiro.test(rating_data$rating_ave)
+
+#library(ez) # for ezANOVA
+#rating_data$id= factor(rating_data$id) # Subjectid must be nominal
+#ezANOVA(rating_data, dv=.(rating_ave), wid=.(id), within=.(type_code))
+
+#pairwise.t.test(rating_data$rating_ave, rating_data$type_code, p.adjust="bonf")
+
+library(coin)
+rating_data$id= factor(rating_data$id) # Subjectid must be nominal
+friedman_test(rating_ave~ type_code | id, data=rating_data, distribution="asymptotic")
+
+library(reshape2) # for dcast
+rating_data2 <-dcast(rating_data, id ~ type_code, value.var="rating_ave") # make wide-format table
+ab = wilcox.test(rating_data2$FOLDTOUCH, rating_data2$TOUCHFOLD, paired=TRUE) # a vs. b
+ac = wilcox.test(rating_data2$FOLDTOUCH, rating_data2$FOLD, paired=TRUE) # a vs. c
+bc= wilcox.test(rating_data2$TOUCHFOLD, rating_data2$FOLD, paired=TRUE) # b vs. c
+p.adjust(c(ab$p.value, ac$p.value, bc$p.value), method="holm")
+
+```
+
+
+#### Comfort
+```{r warning=FALSE}
+
+
+comfort_data <- data %>%
+  filter(category == "comfort")
+
+boxplot(rating~type_code,data=comfort_data, main="Comfort",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+rating_data <- comfort_data %>%
+  group_by(id, type_code) %>%
+  summarize(
+    rating_ave = sum(rating) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id,  type_code)
+
+rating_data
+
+
+comfort_summary <-rating_data %>%
+  group_by(type_code) %>%
+  summarize(
+    meanScore = rating_ave %>% mean(na.rm=TRUE),
+    lowCI = ci(rating_ave)[2]%>% pmax(0),
+    highCI = ci(rating_ave)[3]%>% pmin(7),
+    sd = ci(rating_ave)[4],
+    std = rating_ave %>% sd())
+
+comfort_summary
+
+# line + dot
+comfort_graph <- ggplot(comfort_summary) +
+  geom_pointrange( aes(x=type_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#2e86c1", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+comfort_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("comfort_type.pdf", width = 4, height = 1.5)
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+
+
+shapiro.test(rating_data$rating_ave)
+
+#library(ez) # for ezANOVA
+#rating_data$id= factor(rating_data$id) # Subjectid must be nominal
+#ezANOVA(rating_data, dv=.(rating_ave), wid=.(id), within=.(type_code))
+
+#pairwise.t.test(rating_data$rating_ave, rating_data$type_code, p.adjust="bonf")
+
+library(coin)
+rating_data$id= factor(rating_data$id) # Subjectid must be nominal
+friedman_test(rating_ave~ type_code | id, data=rating_data, distribution="asymptotic")
+
+library(reshape2) # for dcast
+rating_data2 <-dcast(rating_data, id ~ type_code, value.var="rating_ave") # make wide-format table
+ab = wilcox.test(rating_data2$FOLDTOUCH, rating_data2$TOUCHFOLD, paired=TRUE) # a vs. b
+ac = wilcox.test(rating_data2$FOLDTOUCH, rating_data2$FOLD, paired=TRUE) # a vs. c
+bc= wilcox.test(rating_data2$TOUCHFOLD, rating_data2$FOLD, paired=TRUE) # b vs. c
+p.adjust(c(ab$p.value, ac$p.value, bc$p.value), method="holm")
+
+
+
+```
+
+#### Confidence
+```{r warning=FALSE}
+
+
+confidence_data <- data %>%
+  filter(category == "confidence")
+
+boxplot(rating~type_code,data=confidence_data, main="Confidence",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+
+rating_data <- confidence_data %>%
+  group_by(id, type_code) %>%
+  summarize(
+    rating_ave = sum(rating) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id,  type_code)
+
+rating_data
+
+
+confidence_summary <-rating_data %>%
+  group_by(type_code) %>%
+  summarize(
+    meanScore = rating_ave %>% mean(na.rm=TRUE),
+    lowCI = ci(rating_ave)[2]%>% pmax(0),
+    highCI = ci(rating_ave)[3]%>% pmin(7),
+    sd = ci(rating_ave)[4],
+    std = rating_ave %>% sd())
+
+confidence_summary
+
+# line + dot
+confidence_graph <- ggplot(confidence_summary) +
+  geom_pointrange( aes(x=type_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#EB984E", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+confidence_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("confidence_type.pdf", width = 4, height = 1.5)
+
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+
+
+shapiro.test(rating_data$rating_ave)
+
+#library(ez) # for ezANOVA
+#rating_data$id= factor(rating_data$id) # Subjectid must be nominal
+#ezANOVA(rating_data, dv=.(rating_ave), wid=.(id), within=.(type_code))
+
+#pairwise.t.test(rating_data$rating_ave, rating_data$type_code, p.adjust="bonf")
+
+library(coin)
+rating_data$id= factor(rating_data$id) # Subjectid must be nominal
+friedman_test(rating_ave~ type_code | id, data=rating_data, distribution="asymptotic")
+
+library(reshape2) # for dcast
+rating_data2 <-dcast(rating_data, id ~ type_code, value.var="rating_ave") # make wide-format table
+ab = wilcox.test(rating_data2$FOLDTOUCH, rating_data2$TOUCHFOLD, paired=TRUE) # a vs. b
+ac = wilcox.test(rating_data2$FOLDTOUCH, rating_data2$FOLD, paired=TRUE) # a vs. c
+bc= wilcox.test(rating_data2$TOUCHFOLD, rating_data2$FOLD, paired=TRUE) # b vs. c
+p.adjust(c(ab$p.value, ac$p.value, bc$p.value), method="holm")
+
+
+```
+
+#### Social acceptance
+```{r warning=FALSE}
+
+
+social_data <- data %>%
+  filter(category == "social")
+
+boxplot(rating~type_code,data=social_data, main="Social",
+   xlab="Gesture", ylab="likert scale", horizontal=TRUE, outline = FALSE)
+
+rating_data <- social_data %>%
+  group_by(id, type_code) %>%
+  summarize(
+    rating_ave = sum(rating) / n(),
+    n_trials = n()
+  ) %>%
+  ungroup() %>%
+  arrange(id,  type_code)
+
+rating_data
+
+social_summary <-rating_data %>%
+  group_by(type_code) %>%
+  summarize(
+    meanScore = rating_ave %>% mean(na.rm=TRUE),
+    lowCI = ci(rating_ave)[2]%>% pmax(0),
+    highCI = ci(rating_ave)[3]%>% pmin(7),
+    sd = ci(rating_ave)[4],
+    std = rating_ave %>% sd())
+
+social_summary
+
+# line + dot
+social_graph <- ggplot(social_summary) +
+  geom_pointrange( aes(x=type_code, y=meanScore, ymin=lowCI, ymax=highCI), colour="#A569BD", alpha=0.9, size=0.8) +
+  scale_y_reverse(lim=c(7,2)) + 
+  coord_flip()
+
+social_graph + theme( # remove the vertical grid lines
+          panel.background = element_blank(),
+          panel.grid.major.y = element_blank() ,
+          # explicitly set the horizontal lines (or they will disappear too)
+          panel.grid.major.x = element_line( size=.1, color="gray" ),
+          axis.title.x = element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y=element_blank(),
+          axis.ticks.y = element_blank()
+    )
+
+ggsave("social_type.pdf", width = 4, height = 1.5)
+
+
+
+```
+#### analysis
+
+```{r warning=FALSE}
+
+
+
+
+shapiro.test(rating_data$rating_ave)
+
+#library(ez) # for ezANOVA
+#rating_data$id= factor(rating_data$id) # Subjectid must be nominal
+#ezANOVA(rating_data, dv=.(rating_ave), wid=.(id), within=.(type_code))
+
+#pairwise.t.test(rating_data$rating_ave, rating_data$type_code, p.adjust="bonf")
+
+library(coin)
+rating_data$id= factor(rating_data$id) # Subjectid must be nominal
+friedman_test(rating_ave~ type_code | id, data=rating_data, distribution="asymptotic")
+
+library(reshape2) # for dcast
+rating_data2 <-dcast(rating_data, id ~ type_code, value.var="rating_ave") # make wide-format table
+ab = wilcox.test(rating_data2$FOLDTOUCH, rating_data2$TOUCHFOLD, paired=TRUE) # a vs. b
+ac = wilcox.test(rating_data2$FOLDTOUCH, rating_data2$FOLD, paired=TRUE) # a vs. c
+bc= wilcox.test(rating_data2$TOUCHFOLD, rating_data2$FOLD, paired=TRUE) # b vs. c
+p.adjust(c(ab$p.value, ac$p.value, bc$p.value), method="holm")
+
+
+
+```
+
+### correlation
+
+```{r warning=FALSE}
+
+library("ggpubr")
+res <- cor.test(participants_fold_ease$rating, participants_fold_ease$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_ease, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_fold_ease$rating, participants_fold_ease$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_ease, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+
+res <- cor.test(participants_fold_comfort$rating, participants_fold_comfort$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_comfort, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_fold_comfort$rating, participants_fold_comfort$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_comfort, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+
+res <- cor.test(participants_fold_social$rating, participants_fold_social$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_social, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_fold_social$rating, participants_fold_social$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_social, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+
+res <- cor.test(participants_fold_confidence$rating, participants_fold_confidence$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_confidence, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_fold_confidence$rating, participants_fold_confidence$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_fold_confidence, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+```
+
+```{r warning=FALSE}
+
+library("ggpubr")
+res <- cor.test(participants_touchfold_ease$rating, participants_touchfold_ease$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_ease, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_touchfold_ease$rating, participants_touchfold_ease$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_ease, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+
+res <- cor.test(participants_touchfold_comfort$rating, participants_touchfold_comfort$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_comfort, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_touchfold_comfort$rating, participants_touchfold_comfort$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_comfort, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+
+res <- cor.test(participants_touchfold_social$rating, participants_touchfold_social$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_social, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_touchfold_social$rating, participants_touchfold_social$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_social, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+
+res <- cor.test(participants_touchfold_confidence$rating, participants_touchfold_confidence$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_confidence, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_touchfold_confidence$rating, participants_touchfold_confidence$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_touchfold_confidence, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+```
+
+```{r warning=FALSE}
+
+library("ggpubr")
+res <- cor.test(participants_foldtouch_ease$rating, participants_foldtouch_ease$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_ease, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_foldtouch_ease$rating, participants_foldtouch_ease$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_ease, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+
+res <- cor.test(participants_foldtouch_comfort$rating, participants_foldtouch_comfort$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_comfort, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_foldtouch_comfort$rating, participants_foldtouch_comfort$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_comfort, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+
+res <- cor.test(participants_foldtouch_social$rating, participants_foldtouch_social$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_social, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_foldtouch_social$rating, participants_foldtouch_social$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_social, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+
+res <- cor.test(participants_foldtouch_confidence$rating, participants_foldtouch_confidence$handLength, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_confidence, x = "handLength", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handLength", ylab = "rating")
+
+res <- cor.test(participants_foldtouch_confidence$rating, participants_foldtouch_confidence$handWidth, 
+                    method = "spearman")
+res
+
+ggscatter(participants_foldtouch_confidence, x = "handWidth", y = "rating", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "handWidth", ylab = "rating")
+```
